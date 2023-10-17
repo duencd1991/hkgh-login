@@ -1,0 +1,368 @@
+﻿using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+using System.Windows.Forms;
+using WindowsInput;
+using WindowsInput.Native;
+
+namespace YulgangLogin
+{
+    public partial class FormMain : Form
+    {
+        private bool _startLogin = false;
+        private bool _loginEnter = true;
+        private bool _changeTitle = true;
+        private int _mode = 0;
+        private int _loginSelected;
+        public FormMain()
+        {
+            InitializeComponent();
+        }
+
+        private void FormMain_Load(object sender, EventArgs e)
+        {
+            //Check database file
+            Database.Create();
+
+            //Master Password
+            if( Database.CheckConnectionDefault() )
+            {
+                FormEncryptChangePassword formEncryptFirst = new FormEncryptChangePassword();
+                formEncryptFirst.ShowDialog();
+            }
+            else
+            {
+                FormEncrypt formEncrypt = new FormEncrypt();
+                formEncrypt.ShowDialog();
+            }
+
+            //Set title
+            this.Text = "Yulgang Login " + Assembly.GetExecutingAssembly().GetName().Version.ToString();
+
+            //List view login
+            listViewLogin.AutoResizeColumns(ColumnHeaderAutoResizeStyle.ColumnContent);
+            listViewLogin.AutoResizeColumns(ColumnHeaderAutoResizeStyle.HeaderSize);
+            listViewLogin.Columns.Add("ID", 0);
+            listViewLogin.Columns.Add("Title", 140);
+            listViewLogin.Columns.Add("Username", 150);
+
+            //Load Users
+            ReloadLists();
+
+            //Send button to front
+            buttonCancel.BringToFront();
+
+            //Warning
+            if( !File.Exists(FormWarning.PathWarning()) )
+            {
+                FormWarning formWarning = new FormWarning();
+                formWarning.ShowDialog();
+            }
+
+            //Setting
+            comboBoxMode.SelectedIndex = Properties.Settings.Default.mode;
+            checkBoxChangeTitle.Checked = Properties.Settings.Default.changeTitle;
+            checkBoxLoginEnter.Checked = Properties.Settings.Default.loginEnter;
+        }
+
+        public void ReloadLists()
+        {
+            //Clear
+            listViewLogin.Items.Clear();
+
+            //Add items in the list view login form users
+            string[] arr = new string[3];
+            ListViewItem listViewItem ;
+
+            if( User.Lists() != null )
+            {
+                foreach( var user in User.Lists() )
+                {
+                    //Add first item
+                    arr[0] = user.Id.ToString();
+                    arr[1] = user.Title;
+                    arr[2] = user.Username;
+                    listViewItem = new ListViewItem(arr);
+                    listViewLogin.Items.Add(listViewItem);
+                }
+            }
+        }
+
+        private void buttonAdd_Click(object sender, EventArgs e)
+        {
+            FormAdd formAdd = new FormAdd(this, null);
+            formAdd.Show();
+        }
+
+        private void buttonRemove_Click(object sender, EventArgs e)
+        {
+            for( int i = 0; i < listViewLogin.SelectedItems.Count; i++ )
+            {
+                int id =  Convert.ToInt32(listViewLogin.SelectedItems[i].SubItems[0].Text);
+                User.DeleteUser(new User { Id = id });
+            }
+            ReloadLists();
+        }
+
+        private void buttonEdit_Click(object sender, EventArgs e)
+        {
+            if( listViewLogin.SelectedItems.Count == 1 )
+            {
+                int id =  Convert.ToInt32(listViewLogin.SelectedItems[0].SubItems[0].Text);
+                User user = User.GetUserById(id);
+
+                if( user != null )
+                {
+                    FormAdd formAdd = new FormAdd(this, user);
+                    formAdd.Show();
+                }
+
+                ReloadLists();
+            }
+        }
+        private void buttonLogin_Click(object sender, EventArgs e)
+        {
+            StartLogin();
+        }
+        private void StartLogin()
+        {
+            if( listViewLogin.SelectedItems.Count != 1 )
+            {
+                MessageBox.Show(@"Vui lòng chọn các mục từ phía bên trái trước.!", @"Alert", MessageBoxButtons.OK);
+                return;
+            }
+
+            _loginSelected = Convert.ToInt32(listViewLogin.SelectedItems[0].SubItems[0].Text);
+            _startLogin = true;
+            buttonLogin.Text = @"Wait focus game window...";
+            buttonLogin.Enabled = false;
+            buttonCancel.Visible = true;
+            buttonCancel.Enabled = true;
+            checkBoxChangeTitle.Enabled = false;
+            timerLogin.Enabled = true;
+        }
+
+        private void StopLogin()
+        {
+            _startLogin = false;
+            buttonLogin.Text = @"LOGIN";
+            buttonLogin.Enabled = true;
+            buttonCancel.Enabled = false;
+            checkBoxChangeTitle.Enabled = true;
+            buttonCancel.Visible = false;
+        }
+
+        private void buttonCancel_Click(object sender, EventArgs e)
+        {
+            StopLogin();
+        }
+
+
+        [System.Runtime.InteropServices.DllImport("user32")]
+        private static extern IntPtr GetForegroundWindow();
+        [System.Runtime.InteropServices.DllImport("user32")]
+        private static extern int GetWindowText(System.IntPtr hWnd, System.Text.StringBuilder lpString, int cch);
+        [System.Runtime.InteropServices.DllImport("user32")]
+        private static extern int SetWindowText(System.IntPtr hWnd, string text);
+        private void timerLogin_Tick(object sender, EventArgs e)
+        {
+            if( _startLogin )
+            {
+                System.Text.StringBuilder title = new System.Text.StringBuilder(256);
+                IntPtr hWnd = GetForegroundWindow();
+                GetWindowText(hWnd, title, title.Capacity);
+                if( title.ToString().StartsWith("YGOnline") )
+                {
+                    StopLogin();
+
+                    //Load user
+                    User user = User.GetUserById(_loginSelected);
+                    if( user != null )
+                    {
+                        //Change title
+                        if( _changeTitle )
+                        {
+                            SetWindowText(hWnd, "YGOnline - " + user.Title);
+                        }
+
+                        //Send key
+                        InputSimulator input = new InputSimulator();
+
+                        Console.WriteLine(@"Mode = " + _mode.ToString());
+                        //Mode = 0; typing
+                        if (_mode == 0)
+                        {
+                            Console.WriteLine(@"use Typing");
+                            //Send username
+                            input.Keyboard.TextEntry(user.Username);
+                            //Send tab
+                            input.Keyboard.Sleep(200);
+                            input.Keyboard.KeyDown(VirtualKeyCode.TAB);
+                            input.Keyboard.Sleep(150);
+                            input.Keyboard.KeyUp(VirtualKeyCode.TAB);
+                            //Send password
+                            input.Keyboard.Sleep(200);
+                            input.Keyboard.TextEntry(user.Password);
+                        }else if (_mode == 1)
+                        {
+                            Console.WriteLine(@"use Copy");
+                            //Copy and Paste username
+                            Clipboard.SetText(user.Username);
+                            input.Keyboard.KeyDown(VirtualKeyCode.CONTROL);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyDown(VirtualKeyCode.SHIFT);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyDown(VirtualKeyCode.INSERT);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyUp(VirtualKeyCode.CONTROL);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyUp(VirtualKeyCode.SHIFT);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyUp(VirtualKeyCode.INSERT);
+
+                            //Send tab
+                            input.Keyboard.Sleep(150);
+                            input.Keyboard.KeyDown(VirtualKeyCode.TAB);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyUp(VirtualKeyCode.TAB);
+                            input.Keyboard.Sleep(100);
+
+                            //Copy and Paste password
+                            Clipboard.SetText(user.Password);
+                            input.Keyboard.KeyDown(VirtualKeyCode.CONTROL);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyDown(VirtualKeyCode.SHIFT);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyDown(VirtualKeyCode.INSERT);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyUp(VirtualKeyCode.CONTROL);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyUp(VirtualKeyCode.SHIFT);
+                            input.Keyboard.Sleep(50);
+                            input.Keyboard.KeyUp(VirtualKeyCode.INSERT);
+                        }
+
+
+                        //Send enter login
+                        Console.WriteLine(_loginEnter);
+                        if( _loginEnter )
+                        {
+                            Console.WriteLine(@"Enter");
+                            input.Keyboard.Sleep(250);
+                            input.Keyboard.KeyPress(VirtualKeyCode.RETURN);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                timerLogin.Enabled = false;
+            }
+
+            Console.WriteLine(@"TimerLogin Tick!" + DateTime.Now);
+        }
+
+        private void checkBoxLoginEnter_CheckedChanged(object sender, EventArgs e)
+        {
+            _loginEnter = checkBoxLoginEnter.Checked;
+            Console.WriteLine(_loginEnter);
+
+            Properties.Settings.Default["loginEnter"] = checkBoxLoginEnter.Checked;
+            Properties.Settings.Default.Save();
+        }
+
+        private void checkBoxChangeTitle_CheckedChanged(object sender, EventArgs e)
+        {
+            _changeTitle = checkBoxChangeTitle.Checked;
+            Console.WriteLine(_changeTitle);
+
+            Properties.Settings.Default["changeTitle"] = checkBoxChangeTitle.Checked;
+            Properties.Settings.Default.Save();
+        }
+
+        private void fileToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void listViewLogin_DoubleClick(object sender, EventArgs e)
+        {
+            StartLogin();
+        }
+
+        private void ToolStripMenuItemAbout_Click(object sender, EventArgs e)
+        {
+            MessageBox.Show("Chương trình này được tạo ra bởi Trọc\nNếu bạn gặp sự cố, hãy tắt máy.", "Trở về", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void MasterToolStripMenuItemChangePassword_Click(object sender, EventArgs e)
+        {
+            FormEncryptChangePassword formEncryptFirst = new FormEncryptChangePassword();
+            formEncryptFirst.Text = "Đặt mật khẩu mới";
+            formEncryptFirst.ChangePassword = true;
+            formEncryptFirst.ShowDialog();
+        }
+
+        private void ToolStripMenuItemClean_Click(object sender, EventArgs e)
+        {
+            DialogResult dialogResult = MessageBox.Show("Bạn sắp xóa sạch dữ liệu cũ một cách không thể cứu vãn được. Có thể là do bạn không nhớ mật khẩu hoặc gặp sự cố khi truy cập dữ liệu của mình. Bạn có chắc chắn muốn xóa tất cả dữ liệu không?","Chắc chắn?",MessageBoxButtons.YesNo,MessageBoxIcon.Question);
+            if( dialogResult == DialogResult.Yes )
+            {
+                if( Database.Clean() )
+                {
+                    MessageBox.Show("Dữ liệu đã được xóa. Vui lòng vào lại chương trình.", "Cảnh báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    Process.GetCurrentProcess().Kill();
+                }
+                else
+                {
+                    MessageBox.Show("Đã xảy ra lỗi; không thể xóa dữ liệu.", "ERROR", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void ToolStripMenuItemExportDatabase_Click(object sender, EventArgs e)
+        {
+            if( saveFileDialogExportDatabase.ShowDialog() == DialogResult.OK )
+            {
+                string path = saveFileDialogExportDatabase.FileName;
+                Database.Export(path);
+            }
+        }
+
+        private void ToolStripMenuItemImportDatabase_Click(object sender, EventArgs e)
+        {
+            DialogResult dialogResult = MessageBox.Show("Dữ liệu cũ sẽ bị xóa và không thể phục hồi được nếu bạn nhập dữ liệu mới.?","Cảnh báo",MessageBoxButtons.YesNo,MessageBoxIcon.Question);
+            if( dialogResult == DialogResult.Yes )
+            {
+                if( openFileDialogImportDatabase.ShowDialog() == DialogResult.OK )
+                {
+                    string path = openFileDialogImportDatabase.FileName;
+                    Database.Import(path);
+                    MessageBox.Show("Dữ liệu đã được nhập thành công. Hãy mở một chương trình mới.", "Cảnh báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    Process.GetCurrentProcess().Kill();
+                }
+            }
+        }
+
+        private void ToolStripMenuItemUpdate_Click(object sender, EventArgs e)
+        {
+            System.Diagnostics.Process.Start("https://translate.google.com/");
+        }
+
+        private void comboBoxMode_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            _mode = comboBoxMode.SelectedIndex;
+            Properties.Settings.Default["mode"] = comboBoxMode.SelectedIndex;
+            Properties.Settings.Default.Save();
+        }
+    }
+}
